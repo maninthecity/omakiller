@@ -280,6 +280,24 @@ def describe(app):
     return " · ".join(bits)
 
 
+def wait_gone(pids, seconds):
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        pids = {p for p in pids if os.path.exists(f"/proc/{p}")}
+        if not pids:
+            return set()
+        time.sleep(0.1)
+    return {p for p in pids if os.path.exists(f"/proc/{p}")}
+
+
+def signal_all(pids, sig):
+    for pid in pids:
+        try:
+            os.kill(pid, sig)
+        except OSError:
+            pass
+
+
 def kill_app(app):
     procs = read_procs()
     targets = set(app["members"])
@@ -292,23 +310,33 @@ def kill_app(app):
     targets -= ancestors(procs, SELF)
     targets = {t for t in targets if t in procs}
 
-    for pid in targets:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
-    deadline = time.time() + 3
-    while time.time() < deadline:
-        targets = {t for t in targets if os.path.exists(f"/proc/{t}")}
-        if not targets:
-            return True
-        time.sleep(0.1)
-    for pid in targets:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
-    return True
+    # Stage 1 targets: the topmost "real" programs, skipping wrapper
+    # shells and sandboxes (exe_key returns None for those).
+    def has_real_ancestor(pid):
+        ppid = procs[pid].ppid
+        while ppid in targets:
+            if exe_key(procs[ppid]) is not None:
+                return True
+            ppid = procs[ppid].ppid
+        return False
+
+    tops = {t for t in targets
+            if exe_key(procs[t]) is not None and not has_real_ancestor(t)}
+    if not tops:
+        tops = {t for t in targets if procs[t].ppid not in targets}
+    signal_all(tops, signal.SIGTERM)
+    targets = wait_gone(targets, 4)
+    if not targets:
+        return
+
+    # Stage 2: anything still running gets a polite request too.
+    signal_all(targets, signal.SIGTERM)
+    targets = wait_gone(targets, 2)
+    if not targets:
+        return
+
+    # Stage 3: force-kill whatever ignored both requests.
+    signal_all(targets, signal.SIGKILL)
 
 
 def notify(headline, description=""):
