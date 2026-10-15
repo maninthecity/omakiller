@@ -22,7 +22,7 @@ kills the selected one.
 ## Install
 
 ```
-git clone https://github.com/YOUR-USERNAME/omakiller.git
+git clone https://github.com/maninthecity/omakiller.git
 cp omakiller/omakiller ~/.local/bin/
 chmod +x ~/.local/bin/omakiller
 ```
