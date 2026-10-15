@@ -43,7 +43,6 @@ inside the outer `{ }`:
 ```
 
 Then run `omarchy restart shell`. Kill will show up in the Omarchy menu
-(Super + Alt + Space).
 
 ## Usage
 
@@ -60,8 +59,37 @@ Add names to `~/.config/omakiller/ignore`, one per line:
 
 ```
 # apps omakiller should never show
-syncthing
+example
 ```
+## Uninstall
+
+Remove the script:
+
+```
+rm ~/.local/bin/omakiller
+```
+
+Remove your ignore list, if you made one:
+
+```
+rm -rf ~/.config/omakiller
+```
+
+If you added the keybind, delete the omakiller line from
+`~/.config/hypr/bindings.lua`, then run:
+
+```
+hyprctl reload
+```
+
+If you added it to the Omarchy menu, delete the `"kill"` line from
+`~/.config/omarchy/extensions/omarchy-menu.jsonc`, then run:
+
+```
+omarchy restart shell
+```
+
+
 
 ## License
 
