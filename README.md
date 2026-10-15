@@ -68,7 +68,7 @@ example
 ```
 ```
 plugin remove io.github.maninthecity.omakiller
-
+```
 ```
 ```
 Remove the script:
