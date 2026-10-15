@@ -29,6 +29,10 @@ chmod +x ~/.local/bin/omakiller
 
 Add a keybind to `~/.config/hypr/bindings.lua`:
 
+```lua
+o.bind("SUPER + SHIFT + K", "Kill app", "omakiller")
+```
+
 ### Add it to the Omarchy menu (optional)
 
 Open `~/.config/omarchy/extensions/omarchy-menu.jsonc` and add this line
@@ -40,13 +44,6 @@ inside the outer `{ }`:
 
 Then run `omarchy restart shell`. Kill will show up in the Omarchy menu
 (Super + Alt + Space).
-
-
-```lua
-o.bind("SUPER + SHIFT + K", "Kill app", "omakiller")
-```
-
-Then run `hyprctl reload`. Check `Super + K` first to make sure the keys aren't already used.
 
 ## Usage
 
