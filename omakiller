@@ -1,0 +1,358 @@
+#!/usr/bin/env python3
+"""omakiller - pick a running app from the Omarchy launcher and kill it.
+
+Apps are anything with a Hyprland window, a tray icon, or its own launched
+app scope (app-*.scope, which is how Omarchy/uwsm starts apps). System
+services, the compositor, the Omarchy shell and its helpers are left out.
+
+  omakiller           open the picker and kill the chosen app
+  omakiller --list    print the detected apps and exit
+"""
+
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+
+UID = os.getuid()
+SELF = os.getpid()
+IGNORE_FILE = os.path.expanduser("~/.config/omakiller/ignore")
+
+# Scope names / executables that belong to the desktop itself, never apps.
+SYSTEM_PATTERNS = [
+    r"omarchy", r"udiskie", r"hyprland-monitor", r"hypridle", r"hyprsunset",
+    r"hyprpolkit", r"polkit", r"walker", r"elephant", r"swaybg", r"swayosd",
+    r"mako", r"quickshell", r"fcitx", r"xdg-desktop-portal", r"pipewire",
+    r"wireplumber", r"\bdbus", r"gnome-keyring", r"bt-agent", r"Hyprland$",
+    r"uwsm", r"omakiller",
+]
+
+# Executables too generic to tie two processes to the same app.
+GENERIC_EXES = {
+    "bash", "sh", "zsh", "fish", "dash", "env", "sleep", "socat", "perl",
+    "node", "java", "electron", "systemd", "gtk-launch", "busybox", "bwrap", "xdg-dbus-proxy", "flatpak", "flatpak-portal",
+}
+
+
+def run(cmd):
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def load_ignores():
+    pats = list(SYSTEM_PATTERNS)
+    try:
+        with open(IGNORE_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    pats.append(re.escape(line))
+    except OSError:
+        pass
+    return re.compile("|".join(pats), re.IGNORECASE)
+
+
+class Proc:
+    __slots__ = ("pid", "ppid", "comm", "exe", "unit", "rss", "start")
+
+
+def read_procs():
+    procs = {}
+    for name in os.listdir("/proc"):
+        if not name.isdigit():
+            continue
+        pid = int(name)
+        try:
+            if os.stat(f"/proc/{pid}").st_uid != UID:
+                continue
+            with open(f"/proc/{pid}/stat") as f:
+                stat = f.read()
+            with open(f"/proc/{pid}/cgroup") as f:
+                cgroup = f.read().strip()
+        except OSError:
+            continue
+        p = Proc()
+        p.pid = pid
+        # comm can contain spaces/parens; fields after the last ')' are fixed.
+        p.comm = stat[stat.index("(") + 1:stat.rindex(")")]
+        fields = stat[stat.rindex(")") + 2:].split()
+        p.ppid = int(fields[1])
+        p.start = int(fields[19])
+        p.rss = int(fields[21]) * os.sysconf("SC_PAGE_SIZE")
+        try:
+            p.exe = os.path.realpath(os.readlink(f"/proc/{pid}/exe"))
+        except OSError:
+            p.exe = ""
+        p.unit = cgroup.rsplit("/", 1)[-1]
+        procs[pid] = p
+    return procs
+
+
+def descendants(procs, root):
+    children = {}
+    for p in procs.values():
+        children.setdefault(p.ppid, []).append(p.pid)
+    out, stack = set(), [root]
+    while stack:
+        pid = stack.pop()
+        if pid in out:
+            continue
+        out.add(pid)
+        stack.extend(children.get(pid, []))
+    return out
+
+
+def ancestors(procs, pid):
+    out = set()
+    while pid in procs and pid not in out:
+        out.add(pid)
+        pid = procs[pid].ppid
+    return out
+
+
+def is_app_scope(unit):
+    return unit.startswith("app-") and unit.endswith(".scope")
+
+
+def windows():
+    try:
+        return json.loads(run(["hyprctl", "clients", "-j"]) or "[]")
+    except json.JSONDecodeError:
+        return []
+
+
+def tray_items():
+    """Return [(pid, title)] for every StatusNotifierItem in the tray."""
+    out = run(["busctl", "--user", "--json=short", "get-property",
+               "org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher",
+               "org.kde.StatusNotifierWatcher", "RegisteredStatusNotifierItems"])
+    try:
+        items = json.loads(out)["data"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return []
+    result = []
+    for item in items:
+        service, _, path = item.partition("/")
+        path = "/" + path if path else "/StatusNotifierItem"
+        pid_out = run(["busctl", "--user", "call", "org.freedesktop.DBus",
+                       "/org/freedesktop/DBus", "org.freedesktop.DBus",
+                       "GetConnectionUnixProcessID", "s", service]).split()
+        if len(pid_out) < 2 or not pid_out[1].isdigit():
+            continue
+        title = ""
+        for prop in ("Title", "Id"):
+            t = run(["busctl", "--user", "--json=short", "get-property",
+                     service, path, "org.kde.StatusNotifierItem", prop])
+            try:
+                title = json.loads(t)["data"].strip()
+            except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+                title = ""
+            if title:
+                break
+        result.append((int(pid_out[1]), title))
+    return result
+
+
+def pretty(name):
+    name = name.rsplit(".", 1)[-1] if "." in name and " " not in name else name
+    name = re.sub(r"[-_]+", " ", name).strip()
+    return name[:1].upper() + name[1:] if name else name
+
+
+def exe_key(p):
+    base = os.path.basename(p.exe or p.comm).lower()
+    if not base or base in GENERIC_EXES or base.startswith("python"):
+        return None
+    return p.exe or p.comm
+
+
+def collect_apps():
+    procs = read_procs()
+    ignore = load_ignores()
+    protected = ancestors(procs, SELF)  # never kill the menu or what launched it
+
+    # Each app starts as a seed process; its "members" are what gets killed.
+    seeds = {}  # seed pid -> {"windows": n, "tray": title, "class": str}
+
+    def seed(pid):
+        return seeds.setdefault(pid, {"windows": 0, "tray": "", "class": "", "title": ""})
+
+    for w in windows():
+        pid = w.get("pid")
+        if pid in procs:
+            s = seed(pid)
+            s["windows"] += 1
+            s["class"] = s["class"] or w.get("class") or w.get("initialClass") or ""
+            s["title"] = s["title"] or w.get("title") or ""
+    for pid, title in tray_items():
+        if pid in procs:
+            seed(pid)["tray"] = seed(pid)["tray"] or title
+    scopes = {}
+    for p in procs.values():
+        if is_app_scope(p.unit):
+            scopes.setdefault(p.unit, []).append(p.pid)
+    for unit, pids in scopes.items():
+        root = min(pids, key=lambda x: procs[x].start)
+        seed(root)
+
+    # Expand seeds to member sets: a whole app scope, or a process tree for
+    # windows that live directly in the compositor's cgroup (kitty, nautilus).
+    groups = []
+    for pid, info in seeds.items():
+        if pid in protected:
+            continue
+        p = procs[pid]
+        if is_app_scope(p.unit):
+            members = set(scopes[p.unit])
+        else:
+            members = descendants(procs, pid)
+        groups.append({"members": members, **info})
+
+    # Merge groups that share a scope or a non-generic executable, so Steam,
+    # Discord and Electron apps that split across scopes show up once.
+    merged = True
+    while merged:
+        merged = False
+        for i in range(len(groups)):
+            for j in range(i + 1, len(groups)):
+                a, b = groups[i], groups[j]
+                ka = {exe_key(procs[x]) for x in a["members"]} - {None}
+                kb = {exe_key(procs[x]) for x in b["members"]} - {None}
+                ua = {procs[x].unit for x in a["members"] if is_app_scope(procs[x].unit)}
+                ub = {procs[x].unit for x in b["members"] if is_app_scope(procs[x].unit)}
+                if a["members"] & b["members"] or ka & kb or ua & ub:
+                    a["members"] |= b["members"]
+                    a["windows"] += b["windows"]
+                    for k in ("tray", "class", "title"):
+                        a[k] = a[k] or b[k]
+                    del groups[j]
+                    merged = True
+                    break
+            if merged:
+                break
+
+    apps = []
+    for g in groups:
+        members = {m for m in g["members"] if m in procs} - protected
+        if not members:
+            continue
+        root = min(members, key=lambda x: procs[x].start)
+        rp = procs[root]
+        units = sorted({procs[m].unit for m in members if is_app_scope(procs[m].unit)})
+        exe_name = os.path.basename(rp.exe) or rp.comm
+        tray = re.sub(r"[_-]?status[_-]?icon[_-]?\d*$", "", g["tray"], flags=re.I)
+        label = pretty(g["class"]) or pretty(tray) or pretty(exe_name)
+        haystack = " ".join([label, g["class"], exe_name] + units)
+        if ignore.search(haystack):
+            continue
+        # Scope-only groups of nothing but shells/helpers aren't apps.
+        if not g["windows"] and not g["tray"] and all(exe_key(procs[m]) is None for m in members):
+            continue
+        apps.append({
+            "label": label,
+            "root": root,
+            "members": members,
+            "units": units,
+            "windows": g["windows"],
+            "tray": bool(g["tray"]),
+            "rss": sum(procs[m].rss for m in members),
+        })
+    apps.sort(key=lambda a: (not a["windows"], a["label"].lower()))
+    return apps
+
+
+def describe(app):
+    bits = []
+    if app["windows"]:
+        bits.append(f"{app['windows']} window" + ("s" if app["windows"] > 1 else ""))
+    else:
+        bits.append("background")
+    if app["tray"]:
+        bits.append("tray")
+    mb = app["rss"] / 1024 / 1024
+    bits.append(f"{mb / 1024:.1f} GB" if mb >= 1024 else f"{mb:.0f} MB")
+    bits.append(f"pid {app['root']}")
+    return " · ".join(bits)
+
+
+def kill_app(app):
+    procs = read_procs()
+    targets = set(app["members"])
+    # Re-read scopes so children spawned since listing are included.
+    for p in procs.values():
+        if p.unit in app["units"]:
+            targets.add(p.pid)
+    for pid in list(targets):
+        targets |= descendants(procs, pid)
+    targets -= ancestors(procs, SELF)
+    targets = {t for t in targets if t in procs}
+
+    for pid in targets:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    deadline = time.time() + 3
+    while time.time() < deadline:
+        targets = {t for t in targets if os.path.exists(f"/proc/{t}")}
+        if not targets:
+            return True
+        time.sleep(0.1)
+    for pid in targets:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+    return True
+
+
+def notify(headline, description=""):
+    subprocess.run(["omarchy-notification-send", "-g", "󰆴", headline, description],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def pick(apps):
+    options = []
+    for a in apps:
+        glyph = "" if a["windows"] else "󰀻"
+        options.append(f"{glyph}\t{a['label']}\t{describe(a)}")
+    height = min(560, 60 + 52 * len(options))
+    res = subprocess.run(["omarchy-menu-select", "Kill app", *options,
+                          "--", "--width", "420", "--maxheight", str(height)],
+                         capture_output=True, text=True)
+    if res.returncode != 0 or not res.stdout.strip():
+        return None
+    m = re.search(r"pid (\d+)", res.stdout)
+    if not m:
+        return None
+    pid = int(m.group(1))
+    return next((a for a in apps if a["root"] == pid), None)
+
+
+def main():
+    if "--list" in sys.argv:
+        for a in collect_apps():
+            print(f"{a['label']:<24} {describe(a)}  units={','.join(a['units']) or '-'}")
+        return
+    if "-h" in sys.argv or "--help" in sys.argv:
+        print(__doc__.strip())
+        return
+
+    apps = collect_apps()
+    if not apps:
+        notify("Nothing to kill", "No running apps found")
+        return
+    app = pick(apps)
+    if app is None:
+        return
+    kill_app(app)
+    notify(f"Killed {app['label']}")
+
+
+if __name__ == "__main__":
+    main()

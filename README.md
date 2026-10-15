@@ -1,0 +1,58 @@
+# omakiller
+
+![screenshot](screenshot.png)
+
+A kill menu for Omarchy. Opens a picker in the Omarchy launcher listing your
+running apps (windows, tray icons, and background apps), and pressing Enter
+kills the selected one.
+
+## Features
+
+- Shows each app once, even apps that run many processes (Steam, Discord, Electron apps)
+- Shows window count, tray status, and memory use for each app
+- Tries a clean shutdown first (SIGTERM), then force-kills anything left after 3 seconds
+- Never lists the desktop itself: Hyprland, the Omarchy shell, audio, portals, etc.
+- Custom ignore list for anything else you want hidden
+
+## Requirements
+
+- Omarchy 4 (uses `omarchy-menu-select` and `omarchy-notification-send`)
+- Python 3
+
+## Install
+
+```
+git clone https://github.com/YOUR-USERNAME/omakiller.git
+cp omakiller/omakiller ~/.local/bin/
+chmod +x ~/.local/bin/omakiller
+```
+
+Add a keybind to `~/.config/hypr/bindings.lua`:
+
+```lua
+o.bind("SUPER + SHIFT + K", "Kill app", "omakiller")
+```
+
+Then run `hyprctl reload`. Check `Super + K` first to make sure the keys aren't already used.
+
+## Usage
+
+```
+omakiller           open the picker (stays open until you press Escape)
+omakiller --list    print detected apps and exit
+```
+
+**Note:** pressing Enter kills the app immediately with no confirmation.
+
+## Ignoring apps
+
+Add names to `~/.config/omakiller/ignore`, one per line:
+
+```
+# apps omakiller should never show
+syncthing
+```
+
+## License
+
+MIT
