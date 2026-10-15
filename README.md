@@ -1,6 +1,6 @@
 # omakiller
 
-![screenshot](screenshot.png)
+![screenshot](preview.png)
 
 A kill menu for Omarchy. Opens a picker in the Omarchy launcher listing your
 running apps (windows, tray icons, and background apps), and pressing Enter
@@ -22,9 +22,11 @@ kills the selected one.
 ## Install
 
 ```
-git clone https://github.com/maninthecity/omakiller.git
-cp omakiller/omakiller ~/.local/bin/
-chmod +x ~/.local/bin/omakiller
+omarchy plugin add https://github.com/maninthecity/omakiller.git --enable
+
+```
+```
+The omakiller icon appears in your bar. Click it to open the picker.
 ```
 
 Add a keybind to `~/.config/hypr/bindings.lua`:

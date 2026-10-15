@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.maninthecity.omakiller",
+  "name": "omakiller",
+  "version": "1.1.0",
+  "author": "maninthecity",
+  "license": "MIT",
+  "description": "Kill running apps from the Omarchy launcher, including background and tray apps.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "omakiller",
+    "description": "Pick a running app and kill it.",
+    "category": "System",
+    "aliases": ["kill", "task manager", "process"],
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
