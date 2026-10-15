@@ -29,6 +29,19 @@ chmod +x ~/.local/bin/omakiller
 
 Add a keybind to `~/.config/hypr/bindings.lua`:
 
+### Add it to the Omarchy menu (optional)
+
+Open `~/.config/omarchy/extensions/omarchy-menu.jsonc` and add this line
+inside the outer `{ }`:
+
+```jsonc
+"kill": {"icon":"󰆴","label":"Kill","description":"Stop a running or background app","action":"omakiller"},
+```
+
+Then run `omarchy restart shell`. Kill will show up in the Omarchy menu
+(Super + Alt + Space).
+
+
 ```lua
 o.bind("SUPER + SHIFT + K", "Kill app", "omakiller")
 ```
