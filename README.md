@@ -65,6 +65,12 @@ example
 ```
 ## Uninstall
 
+```
+```
+plugin remove io.github.maninthecity.omakiller
+
+```
+```
 Remove the script:
 
 ```
