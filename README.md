@@ -65,36 +65,41 @@ example
 ```
 ## Uninstall
 
+### If you installed it as a plugin
+
+```bash
+omarchy plugin remove io.github.maninthecity.omakiller --yes
+omarchy restart shell
 ```
-```
-plugin remove io.github.maninthecity.omakiller
-```
-```
-```
+
+### If you installed it manually
+
 Remove the script:
 
-```
+```bash
 rm ~/.local/bin/omakiller
-```
-
-Remove your ignore list, if you made one:
-
-```
-rm -rf ~/.config/omakiller
 ```
 
 If you added the keybind, delete the omakiller line from
 `~/.config/hypr/bindings.lua`, then run:
 
-```
+```bash
 hyprctl reload
 ```
 
 If you added it to the Omarchy menu, delete the `"kill"` line from
 `~/.config/omarchy/extensions/omarchy-menu.jsonc`, then run:
 
-```
+```bash
 omarchy restart shell
+```
+
+### Remove your settings (optional)
+
+If you made an ignore list, delete it:
+
+```bash
+rm -rf ~/.config/omakiller
 ```
 
 
